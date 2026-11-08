@@ -1,6 +1,5 @@
 (ns top.kzre.krro.core.window
   (:require
-    [top.kzre.krro.core.window :as win]
     [top.kzre.krro.core.frame :as frame]))
 
 ;; ── 原生窗口协议 ──────────────────────────────────
@@ -72,7 +71,7 @@
  (vals @window-registry))
 
 (defn all-frames []
- (mapcat win/frames (all-windows)))
+ (mapcat frames (all-windows)))
 
 (defn active-window
  "返回当前拥有输入焦点的 Window，若没有则返回 nil。"
