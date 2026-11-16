@@ -2,7 +2,7 @@
   (:require [top.kzre.clj-build-template.simple :as tpl]))
 
 (def params {:template (tpl/create-template)
-             :artifact "krro-d3"
+             :artifact "krro-core"
              :compile-java? true
              :version "0.1.0"})
 
