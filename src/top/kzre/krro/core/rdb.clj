@@ -55,15 +55,16 @@
 
 (defn- validate-row [schema row]
   (when schema
-    (let [{:keys [primary-key not-null spec]} schema]
+    (let [{:keys [primary-key not-null spec]} schema
+          prim-key (get row primary-key)]
       (when spec
         (when-not (s/valid? spec row)
           (let [explan (s/explain-data spec row)]
-            (throw (ex-info (str "Spec validation failed for row with primary key " primary-key)
+            (throw (ex-info (str "Spec validation failed for row with primary key: " prim-key)
                             {:row row
                              :spec spec
                              :explain explan})))))
-      (when (and (contains? not-null primary-key) (nil? (get row primary-key)))
+      (when (and (contains? not-null primary-key) (nil? prim-key))
         (throw (ex-info (str "Primary key " primary-key " cannot be null") {:row row})))
       (doseq [col not-null]
         (when (nil? (get row col))
