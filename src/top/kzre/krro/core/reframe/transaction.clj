@@ -4,26 +4,51 @@
     [top.kzre.krro.core.reframe.util :as util]
     [top.kzre.krro.core.message      :as msg]))
 
+(defn valid-instruction? [inst]
+  (and (or (vector? inst) (seq? inst) (sequential? inst))
+       (contains? #{:begin-transaction :commit-transaction
+                    :transaction-operation :rollback-transaction}
+                  (first inst))))
 ;; ─────────────────────────────────────────────────────────────
 ;; 指令构造
 ;; ─────────────────────────────────────────────────────────────
 
-(defn begin-transaction
+(defn ^:deprecated begin-transaction
   "构造事务创建指令"
   [trans-kind & {:as args}]
   [:begin-transaction trans-kind args])
 
-(defn commit-transaction
+(defn tx-begin
+  "构造事务创建指令"
+  [trans-kind params]
+  [:begin-transaction trans-kind params])
+
+(defn tx-commit
+  "构造事务提交指令"
+  [trans-kind params]
+  [:commit-transaction trans-kind params])
+
+(defn tx-operate
+  "构建事务操作指令"
+  [trans-kind op-kind params]
+  [:transaction-operation trans-kind op-kind params])
+
+(defn tx-rollback
+  "构造事务回滚指令"
+  [trans-kind params]
+  [:rollback-transaction trans-kind params])
+
+(defn ^:deprecated commit-transaction
   "构造事务提交指令"
   [trans-kind & {:as args}]
   [:commit-transaction trans-kind args])
 
-(defn rollback-transaction
+(defn ^:deprecated rollback-transaction
   "构造事务回滚指令"
   [trans-kind & {:as args}]
   [:rollback-transaction trans-kind args])
 
-(defn transaction-operation
+(defn ^:deprecated transaction-operation
   "构建事务操作指令"
   [trans-kind op-kind & {:as args}]
   [:transaction-operation trans-kind op-kind args])
@@ -290,30 +315,36 @@
 ;; ─────────────────────────────────────────────────────────────
 ;; re-frame interceptor
 ;; ─────────────────────────────────────────────────────────────
+(defn- compat-inst [v]
+  (if (valid-instruction? v) [v] v))
 
 (defn transaction-interceptor
   []
   {:after
    (fn [context]
      (try
-       (let [instructions (get-in context [:effects :transaction])]
-         (if (seq instructions)
-           (let [record      (get-in context [:effects :record])
-                 transaction (get record (transaction-key))
-                 inst-acc    (get record (transaction-instructions-key) [])
-                 [new-trans trans-effects]
-                 (execute-instructions
-                   transaction instructions record inst-acc)
+       (let [inst-v (compat-inst (get-in context [:effects :transaction]))]
+         ;; TODO 移除兼容
+         (if (seq inst-v)
+           (do
+             (when (> (count inst-v) 1)
+               (msg/warn "multi instructions is not yet suppurted!!!"))
+             (let [record      (get-in context [:effects :record])
+                   transaction (get record (transaction-key))
+                   inst-acc    (get record (transaction-instructions-key) [])
+                   [new-trans trans-effects]
+                   (execute-instructions
+                     transaction inst-v record inst-acc)
 
-                 trans-effects'
-                 (-> trans-effects
-                     (assoc-in [:record (transaction-key)]
-                               new-trans)
-                     (assoc-in [:record (transaction-instructions-key)]
-                               (if (some? new-trans)
-                                 (get record (transaction-instructions-key))
-                                 [])))]
-             (update context :effects util/merge-effects trans-effects'))
+                   trans-effects'
+                   (-> trans-effects
+                       (assoc-in [:record (transaction-key)]
+                                 new-trans)
+                       (assoc-in [:record (transaction-instructions-key)]
+                                 (if (some? new-trans)
+                                   (get record (transaction-instructions-key))
+                                   [])))]
+               (update context :effects util/merge-effects trans-effects')))
            context))
        (catch Throwable e
          (msg/warn "transaction interceptor fatal error" {:error e})
