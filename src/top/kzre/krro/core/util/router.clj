@@ -12,25 +12,31 @@
      - 单个 key（如 :u）
      - key 向量（如 [:C-x :u]）
    返回嵌套 map。
+
+   按路径长度升序插入——短路径先落，长路径后落——
+   避免 reduce 顺序导致前缀节点覆盖叶子或反之。
+
    示例：
      (build {:u :undo, [:C-x :u] :save})
      => {:u :undo, :C-x {:u :save}}"
   [bindings]
-  (reduce-kv
-    (fn [m path value]
-      (let [path-vec (if (vector? path) path [path])]
-        (if (seq path-vec)
-          (try
-            (assoc-in m path-vec value)
-            (catch ClassCastException e
-              (throw (ex-info (str "Cannot bind path " path-vec
-                                   " because prefix is already a leaf")
-                              {:path path-vec
-                               :existing (get-in m (butlast path-vec))}
-                              e))))
-          (throw (ex-info "Path must not be empty" {})))))
-    {}
-    bindings))
+  (let [pairs (map (fn [[path value]]
+                     [(if (vector? path) path [path]) value])
+                   bindings)]
+    (doseq [[path-vec _] pairs]
+      (when (empty? path-vec)
+        (throw (ex-info "Path must not be empty" {:path path-vec}))))
+    (reduce
+      (fn [m [path-vec value]]
+        (let [parent (get-in m (butlast path-vec))]
+          (when (and (some? parent) (not (map? parent)))
+            (throw (ex-info (str "Cannot bind path " path-vec
+                                 " because prefix is already a leaf")
+                            {:path     path-vec
+                             :existing parent}))))
+        (assoc-in m path-vec value))
+      {}
+      (sort-by (fn [[path-vec _]] (count path-vec)) pairs))))
 
 (defmacro defrouter
   "定义并构建路由表。
@@ -41,30 +47,54 @@
 
 
 ;; ── 匹配 ────────────────────────────────────
+(defn- resolve*
+  "内部匹配。返回命中的值或 ::miss。
+   与公开 resolve 不同——能区分「未命中」和「叶子是 nil/false」。"
+  [route-table path-vec]
+  (if (or (nil? route-table) (empty? path-vec))
+    ::miss
+    (let [node (get route-table (first path-vec) ::miss)]
+      (cond
+        (= node ::miss)
+        ::miss
+
+        ;; 前缀节点——继续匹配
+        (map? node)
+        (if-let [rest-keys (seq (rest path-vec))]
+          (resolve* node (vec rest-keys))
+          node)
+
+        ;; 叶子但还有剩余路径——未命中（不能把叶子当通配）
+        (seq (rest path-vec))
+        ::miss
+
+        :else
+        node))))
 
 (defn resolve
   "在路由表中查找 path-vec。
    path-vec 为 key 的 vector，如 [:C-x :u]。
    返回：
-     - 叶子值（任意类型）
+     - 叶子值（任意非 nil 类型）
      - map：前缀节点（需要继续匹配）
-     - nil：未命中"
+     - nil：未命中
+   注意：叶子值不能是 map——map 一律视为前缀节点。"
   [route-table path-vec]
-  (when (and route-table (seq path-vec))
-    (let [first-key (first path-vec)]
-      (if-let [node (get route-table first-key)]
-        (if (map? node)
-          (if-let [rest-keys (seq (rest path-vec))]
-            (resolve node (vec rest-keys))
-            node)
-          node)
-        nil))))
+  (let [r (resolve* route-table path-vec)]
+    (when-not (= r ::miss) r)))
 
 (defn resolve-chain
   "在路由表列表中按优先级查找。头到尾递减。
-   返回第一个非 nil 结果。"
+   返回第一个命中的值（含 false）。
+   未命中返回 nil。"
   [path-vec route-tables]
-  (some #(resolve % path-vec) route-tables))
+  (reduce (fn [_ table]
+            (let [r (resolve* table path-vec)]
+              (if (= r ::miss)
+                nil
+                (reduced r))))
+          nil
+          route-tables))
 
 
 ;; ── 会话（分步匹配） ────────────────────────
@@ -73,7 +103,7 @@
   "创建一个路由会话，用于分步匹配（如多键序列）。
    返回 session atom，结构：
      {:stack  []     ; 已输入的前缀节点列表
-      :table  nil    ; 当前活跃的子路由表
+      :table  nil    ; 当前活跃的子路由表（保留字段）
       }"
   []
   (atom {:stack []
@@ -96,21 +126,26 @@
 
 (defn step
   "在会话上下文中处理单步输入。
+
+   会话状态：
+     - 无前缀——在 route-tables 中按优先级匹配单键
+     - 有前缀——只在当前前缀节点内匹配——不回退全局表
+
    参数：
-     session    - make-session 创建的会话
-     input      - 当前输入的 key
-     route-tables - 路由表列表（优先级从高到低）
-     handlers   - {:hit    fn[value] -> 处理命中
-                   :prefix fn[node] -> 处理前缀命中
-                   :miss   fn[input] -> 处理未命中}
+     session       - make-session 创建的会话
+     input         - 当前输入的 key
+     route-tables  - 路由表列表（优先级从高到低）
+     handlers      - {:hit    fn[value]     -> 处理叶子命中
+                      :prefix fn[node]      -> 处理前缀命中
+                      :miss   fn[input]     -> 处理未命中}
    返回 handlers 的返回值。"
   [session input route-tables handlers]
   (let [{:keys [hit prefix miss]} handlers
-        effective-tables (if-let [prefix-node (peek (:stack @session))]
-                           (cons prefix-node route-tables)
-                           route-tables)
-        path-vec [input]
-        result (resolve-chain path-vec effective-tables)]
+        prefix-node (peek (:stack @session))
+        tables      (if prefix-node
+                      (list prefix-node)
+                      route-tables)
+        result      (resolve-chain [input] tables)]
     (cond
       (map? result)
       (do
