@@ -560,7 +560,7 @@
            (handle p#
                    (fn [v# e#]
                      (if e#
-                       `(~expr e#)
+                       (~expr e#)
                        v#))))
         :else
         `(then  (ensure-promise ~expr)
