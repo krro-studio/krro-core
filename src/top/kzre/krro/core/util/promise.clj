@@ -493,6 +493,7 @@
    (-> (async f executor)
        (then ensure-promise))))
 
+
 (defmacro plet
   "Monad 绑定——顺序执行多个 Promise。
 
@@ -545,9 +546,26 @@
     ;; 至少一个绑定——递归展开
     :else
     (let [[binding expr & more] bindings]
-      `(then  (ensure-promise ~expr)
-              (fn [~binding]
-               (plet ~(vec more) ~@body))))))
+      (cond
+        (= binding :finally)
+        `(let [p# (plet ~(vec more) ~@body)]
+           (handle p#
+                   (fn [v# e#]
+                     ~@(when expr
+                         [`(~expr)])
+                     (when e# (throw e#))
+                     v#)))
+        (= binding :catch)
+        `(let [p# (plet ~(vec more) ~@body)]
+           (handle p#
+                   (fn [v# e#]
+                     (if e#
+                       `(~expr e#)
+                       v#))))
+        :else
+        `(then  (ensure-promise ~expr)
+                (fn [~binding]
+                  (plet ~(vec more) ~@body)))))))
 
 (defmacro pplet
   [bindings & body]
@@ -576,7 +594,17 @@
 ;; 内部——解析 bindings 中的 :catch
 ;; ═══════════════════════════════════════════════
 
-(defn- split-handlers
+(defn- only-handlers?
+  "判断 bs 是否全部由 :catch / :finally 处理器对组成（直到末尾）。
+   遇到第一个普通绑定即返回 false。"
+  [bs]
+  (cond
+    (nil? bs) true
+    (or (= :catch (first bs)) (= :finally (first bs)))
+    (and (some? (second bs)) (only-handlers? (nnext bs)))
+    :else false))
+
+(defn- tail-handlers
   "从 bindings 中分离出 :catch 和 :finally 处理器。
 
    bindings 形如：
@@ -587,7 +615,11 @@
       :catch     handler-expr                ;; 默认 *default-error-handler*
       :finally   cleanup-expr 或 nil}        ;; 未提供时为 nil
 
-   :catch / :finally 可出现在任意位置——但各自只能出现一次。"
+   :catch / :finally 只有在「其后不再有普通绑定」时才被识别为处理器——
+   也就是它们只允许出现在所有绑定之后。出现在绑定中间（后面还有普通绑定）的
+   :catch / :finally 不按处理器处理，按普通绑定形式留在 :bindings 里。
+
+   :catch / :finally 各自只能作为处理器出现一次。"
   [bindings]
   (loop [bs      (seq bindings)
          norm    []
@@ -599,7 +631,8 @@
        :catch    (or err `*default-error-handler*)
        :finally  finally}
 
-      (= :catch (first bs))
+      ;; 只有其后不再有普通绑定时，:catch 才是处理器
+      (and (= :catch (first bs)) (only-handlers? (nnext bs)))
       (do
         (when (nil? (second bs))
           (throw (IllegalArgumentException.
@@ -611,7 +644,8 @@
                         "bindings = " (vec bindings)))))
         (recur (nnext bs) norm (second bs) finally))
 
-      (= :finally (first bs))
+      ;; 只有其后不再有普通绑定时，:finally 才是处理器
+      (and (= :finally (first bs)) (only-handlers? (nnext bs)))
       (do
         (when (nil? (second bs))
           (throw (IllegalArgumentException.
@@ -640,7 +674,7 @@
 
 (defmacro plet>
   [bindings & body]
-  (let [{:keys [bindings catch finally]} (split-handlers bindings)]
+  (let [{:keys [bindings catch finally]} (tail-handlers bindings)]
     `(let [p# (plet ~bindings ~@body)]
        (tap p# identity)
        (tap-error p# ~catch)
@@ -650,7 +684,7 @@
 
 (defmacro pplet>
   [bindings & body]
-  (let [{:keys [bindings catch finally]} (split-handlers bindings)]
+  (let [{:keys [bindings catch finally]} (tail-handlers bindings)]
     `(let [p# (pplet ~bindings ~@body)]
        (tap p# identity)
        (tap-error p# ~catch)

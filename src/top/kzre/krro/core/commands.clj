@@ -84,4 +84,7 @@
 
 
 (km/set-global-key!
-  :C-0  :krro.core/delete-frame)
+  [:C-x :0]  :krro.core/delete-frame)
+
+(km/set-global-key!
+  [:C-x :2]  :krro.core/split-frame-horizontal)
