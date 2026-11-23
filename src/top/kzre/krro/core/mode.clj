@@ -74,10 +74,7 @@
          major-kms   (reverse (keep #(when-let [spec (get-mode-spec %)]
                                        (:keymap spec))
                                     (cons major-id major-chain)))]
-     (vec (concat minor-kms major-kms [@km/global-keymap])))))
-
-
-
+     (vec (concat minor-kms major-kms [(km/global-keymap)])))))
 
 (defn- resolve-variables
   "沿主模式父链合并变量，子模式覆盖父模式。

@@ -42,7 +42,7 @@
               (fn [f]
                 (proj/init-project!)
                 (reset! km/prefix-stack ())
-                (reset! km/global-keymap (km/make-keymap {:u :krro.command/undo}))
+                (reset! km/global-keymap* (km/make-keymap {:u :krro.command/undo}))
                 (reset! custom/custom-registry {})
                 (when-let [v (resolve 'top.kzre.krro.core.mode/mode-registry)]
                   (reset! @v {}))

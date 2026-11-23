@@ -8,7 +8,7 @@
 (use-fixtures :each
               (fn [f]
                 ;; 重置全局键图和前缀栈，确保测试隔离
-                (reset! km/global-keymap
+                (reset! km/global-keymap*
                         (km/make-keymap {:u :krro.command/undo
                                          :r :krro.command/redo
                                          :esc :krro.command/escape
@@ -40,10 +40,10 @@
     (is (nil? (km/lookup-key child :z)))))
 
 (deftest test-global-keymap
-  (is (= :krro.command/undo (km/lookup-key @km/global-keymap :u)))
-  (is (= :krro.command/redo (km/lookup-key @km/global-keymap :r)))
+  (is (= :krro.command/undo (km/lookup-key @km/global-keymap* :u)))
+  (is (= :krro.command/redo (km/lookup-key @km/global-keymap* :r)))
   (km/set-global-key! :h :krro.command/help)
-  (is (= :krro.command/help (km/lookup-key @km/global-keymap :h))))
+  (is (= :krro.command/help (km/lookup-key @km/global-keymap* :h))))
 
 ;; ── 模式键图栈测试（基于 Frame）─────────────────────
 (deftest test-mode-keymap-stack

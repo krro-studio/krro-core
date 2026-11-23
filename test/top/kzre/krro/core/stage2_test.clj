@@ -14,7 +14,7 @@
                 (proj/init-project!)
                 ;; 不再有全局 keymap-stack，移除重置
                 (reset! km/prefix-stack ())
-                (reset! km/global-keymap (km/make-keymap {:u :krro.command/undo}))
+                (reset! km/global-keymap* (km/make-keymap {:u :krro.command/undo}))
                 (reset! custom/custom-registry {})
                 (reset! custom/custom-change-hook [])
                 (reset! km/echo-hook [])
