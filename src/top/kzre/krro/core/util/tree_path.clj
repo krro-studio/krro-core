@@ -255,6 +255,13 @@
         (when (< next-idx (count siblings))
           (conj parent-path next-idx))))))
 
+(defn unchecked-above-sibling-path
+  "返回在 layer-id 上方插入新图层时应使用的路径。"
+  [path]
+  (let [parent (butlast path)
+        idx (last path)]
+    (conj (vec parent) (inc idx))))
+
 (defn below-sibling-path
   "同一父容器中当前路径的前一个兄弟路径。已是第一个返回 nil。"
   [layers path _children-fn]
@@ -273,6 +280,8 @@
           idx (last path)
           parent-p (parent path)]
       (mapv #(conj parent-p %) (range (inc idx) n)))))
+
+
 
 (defn below-sibling-paths
   "同一父容器中，当前路径下方（索引更小）的所有兄弟路径。索引升序。"
