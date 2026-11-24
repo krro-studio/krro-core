@@ -30,8 +30,10 @@
    使用模式
    ═══════════════════════════════════════════════
 
-     ;; 定义子节点访问方式（关键字最简便）
-     (def children-fn :layers)
+     ;; 定义子节点读写函数
+     (def children-fn       :layers)                  ;;
+     (def children-fn       #(:layers %))             ;; 读
+     (def assoc-children-fn (fn [n cs] (assoc n :layers cs)))  ;; 写
 
      ;; 查找 → path
      (def p (get-path-by-id nodes :layer-42 :id children-fn))
@@ -44,16 +46,13 @@
      (above-sibling-path nodes p children-fn)
      (parent p)
 
-     ;; path → 其他节点
-     (get-node nodes (above-sibling-path nodes p children-fn) children-fn)
-
      ;; 数据更新
-     (insert-node nodes [1 0] new-node children-fn)
-     (remove-node nodes p children-fn)
-     (move-node nodes p q children-fn)
-     (update-node nodes p f children-fn)
+     (insert-node nodes [1 0] new-node children-fn assoc-children-fn)
+     (remove-node nodes p children-fn assoc-children-fn)
+     (move-node nodes p q children-fn assoc-children-fn)
+     (update-node nodes p f children-fn assoc-children-fn)
 
-   参数顺序遵循 Clojure 惯例：nodes 优先，children-fn 最后。
+   参数顺序遵循 Clojure 惯例：nodes 优先，children-fn / assoc-children-fn 最后。
    检索函数统一使用 get- 前缀。
 
    ═══════════════════════════════════════════════
@@ -71,67 +70,31 @@
      ✗ 节点的语义判断（可见性、类型）——属于业务定义
 
    ═══════════════════════════════════════════════
-   children-fn
+   children-fn / assoc-children-fn
    ═══════════════════════════════════════════════
 
-   children-fn 指明\"如何从节点获取子节点向量\"，支持三种形态：
+   children-fn:       (fn [node] -> children-vector)
+   assoc-children-fn: (fn [node new-children] -> node)
 
-     1. 关键字（推荐）：(get node k)
-        读写皆可，写入走 (assoc node k v)。
+   两者都是普通函数，直接调用，不做任何类型判断。
+   仅作用于非根层级——根级直接是树林向量，不需要它们。
 
-     2. 函数 (fn [node] -> children)
-        只读；写入类函数无法使用（没有反向信息）。
-
-     3. children-accessor 构造的 map：{:get f :assoc f}
-        读写皆可，:assoc 签名 (fn [node new-children] -> node)。
-
-   仅用于非根层级——根级直接是树林向量，不需要它。
-   放在参数列表最后，因为它是可选的最不重要的参数。
-
-   对 nil 节点或叶子节点，children-of 返回 nil，
-   所有下游函数据此安全短路。")
+   对 nil 节点，children-of 返回 nil，所有下游函数据此安全短路。")
 
 ;; ═══════════════════════════════════════════════
 ;; 内部辅助：子节点读写
 ;; ═══════════════════════════════════════════════
 
-(defn- accessor?
-  [x]
-  (and (map? x)
-       (contains? x :get)
-       (contains? x :assoc)))
-
 (defn- children-of
   "读取节点的子节点向量。node 为 nil 时返回 nil。"
   [node children-fn]
-  (cond
-    (nil? node)             nil
-    (keyword? children-fn)  (get node children-fn)
-    (accessor? children-fn) ((:get children-fn) node)
-    (ifn? children-fn)      (children-fn node)
-    :else (throw (ex-info "无效的 children-fn"
-                          {:children-fn children-fn}))))
+  (when node
+    (children-fn node)))
 
 (defn- assoc-children-of
-  "将节点的子节点替换为 new-children，返回新节点。
-   children-fn 必须是关键字或 accessor；纯函数无法写回。"
-  [node children-fn new-children]
-  (cond
-    (keyword? children-fn)  (assoc node children-fn new-children)
-    (accessor? children-fn) ((:assoc children-fn) node new-children)
-    :else (throw (ex-info
-                   "children-fn 为纯函数时无法写回子节点，请改用关键字或 children-accessor"
-                   {:children-fn children-fn}))))
-
-(defn children-accessor
-  "构造可读写的子节点访问器。
-   get-fn:   (fn [node] -> children)
-   assoc-fn: (fn [node new-children] -> node)
-
-   用于需要数据更新（insert/remove/move/update）且子节点不在某个固定
-   关键字下的场景。只读场景可直接用关键字或普通函数。"
-  [get-fn assoc-fn]
-  {:get get-fn :assoc assoc-fn})
+  "将节点的子节点替换为 new-children，返回新节点。"
+  [node assoc-children-fn new-children]
+  (assoc-children-fn node new-children))
 
 ;; ═══════════════════════════════════════════════
 ;; 路径构造（纯路径操作）
@@ -187,8 +150,7 @@
 
 (defn ancestor?
   "a 是否是 b 的祖先路径。
-   [1] 是 [1 2] [1 2 3] 的祖先。
-   相等不算祖先。"
+   [1] 是 [1 2] [1 2 3] 的祖先。相等不算祖先。"
   [a b]
   (and (< (count a) (count b))
        (= a (subvec b 0 (count a)))))
@@ -261,7 +223,7 @@
 
 (defn get-path-by-pred
   "在树林 nodes 中查找第一个满足 pred 的节点，返回其路径。
-   未找到返回 nil。children-fn 指定如何获取子节点。"
+   未找到返回 nil。"
   [nodes pred children-fn]
   (some (fn [[idx node]]
           (if (pred node)
@@ -284,8 +246,7 @@
 
 (defn get-node
   "按索引路径查找节点。空路径返回 nodes 本身。
-   路径无效返回 nil。
-   children-fn 仅用于非根层级。"
+   路径无效返回 nil。"
   [nodes path children-fn]
   (if (empty? path)
     nodes
@@ -445,79 +406,74 @@
 
 (defn insert-node
   "在树林 nodes 的指定路径处插入 node。返回新的节点向量。
-   path 为索引向量，如 [2] 表示根索引 2，[2 0] 表示组内索引。
-   空路径表示插入到末尾。
-
-   需要 children-fn 可写（关键字或 accessor）。"
-  [nodes path node children-fn]
+   path 为空表示插入到末尾。"
+  [nodes path node children-fn assoc-children-fn]
   (if (empty? path)
     (conj (vec nodes) node)
     (let [idx         (last path)
           parent-path (butlast path)]
       (if (empty? parent-path)
-        ;; 根级插入
         (vec (concat (subvec nodes 0 idx)
                      [node]
                      (subvec nodes idx)))
-        ;; 嵌套：找到父节点，递归更新其子节点
         (let [parent-idx   (first parent-path)
               parent       (nth nodes parent-idx)
               children     (children-of parent children-fn)
-              new-children (insert-node children (rest path) node children-fn)
-              new-parent   (assoc-children-of parent children-fn new-children)]
+              new-children (insert-node children (rest path) node
+                                        children-fn assoc-children-fn)
+              new-parent   (assoc-children-of parent assoc-children-fn new-children)]
           (assoc nodes parent-idx new-parent))))))
 
 (defn remove-node
   "从树林 nodes 的指定路径移除节点。返回 [new-nodes removed-node]。
    path 为空时返回 nil。"
-  [nodes path children-fn]
+  [nodes path children-fn assoc-children-fn]
   (when (seq path)
     (let [idx         (last path)
           parent-path (butlast path)]
       (if (empty? parent-path)
-        ;; 根级删除
         (let [removed  (nth nodes idx)
               new-nodes (vec (concat (subvec nodes 0 idx)
                                      (subvec nodes (inc idx))))]
           [new-nodes removed])
-        ;; 嵌套删除
         (let [parent-idx   (first parent-path)
               parent       (nth nodes parent-idx)
               children     (children-of parent children-fn)
-              [new-children removed] (remove-node children (rest path) children-fn)
-              new-parent   (assoc-children-of parent children-fn new-children)]
+              [new-children removed] (remove-node children (rest path)
+                                                  children-fn assoc-children-fn)
+              new-parent   (assoc-children-of parent assoc-children-fn new-children)]
           [(assoc nodes parent-idx new-parent) removed])))))
 
 (defn move-node
-  "将节点从 old-path 移动到 new-path，返回新的树林。
-   old-path 与 new-path 均为索引向量（new-path 语义为\"插入到该位置\"）。
-   同一父下移动时自动修正因先删除造成的索引偏移。"
-  [nodes old-path new-path children-fn]
+  "将节点从 old-path 移动到 new-path（new-path 语义为\"插入到该位置\"）。
+   同一父下移动时自动修正因先删除造成的索引偏移。
+   返回新的树林。"
+  [nodes old-path new-path children-fn assoc-children-fn]
   (when (and (seq old-path) (seq new-path))
-    (let [[temp-nodes removed] (remove-node nodes old-path children-fn)
+    (let [[temp-nodes removed] (remove-node nodes old-path
+                                            children-fn assoc-children-fn)
           same-parent? (= (butlast old-path) (butlast new-path))
           old-idx      (last old-path)
           new-idx      (last new-path)
           adjusted     (if (and same-parent? (< old-idx new-idx))
                          (conj (butlast new-path) (dec new-idx))
                          new-path)]
-      (insert-node temp-nodes adjusted removed children-fn))))
+      (insert-node temp-nodes adjusted removed
+                   children-fn assoc-children-fn))))
 
 (defn update-node
   "对指定路径处的节点应用更新函数 f，返回新的树林。
-   f 接收当前节点，返回更新后的节点。
-   路径为空时返回 nil。"
-  [nodes path f children-fn]
+   f 接收当前节点，返回更新后的节点。路径为空时返回 nil。"
+  [nodes path f children-fn assoc-children-fn]
   (when (seq path)
     (let [idx         (last path)
           parent-path (butlast path)]
       (if (empty? parent-path)
-        ;; 根级更新
         (assoc nodes idx (f (nth nodes idx)))
-        ;; 嵌套更新
         (let [parent-idx   (first parent-path)
               parent       (nth nodes parent-idx)
               children     (children-of parent children-fn)
-              new-children (update-node children (rest path) f children-fn)
-              new-parent   (assoc-children-of parent children-fn new-children)]
+              new-children (update-node children (rest path) f
+                                        children-fn assoc-children-fn)
+              new-parent   (assoc-children-of parent assoc-children-fn new-children)]
           (assoc nodes parent-idx new-parent))))))
