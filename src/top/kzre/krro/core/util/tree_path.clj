@@ -167,9 +167,9 @@
        (= (parent a) (parent b))))
 
 (defn within?
-  "a 是否在 b 的子树内（含 b 自身）。"
-  [a b]
-  (or (= a b) (ancestor? b a)))
+  "child 是否在 parent 的子树内（含 parent 自身）。"
+  [child parent]
+  (or (= child parent) (ancestor? parent child)))
 
 (defn common-ancestor
   "两个路径的最深公共祖先路径。"
@@ -477,3 +477,41 @@
                                         children-fn assoc-children-fn)
               new-parent   (assoc-children-of parent assoc-children-fn new-children)]
           (assoc nodes parent-idx new-parent))))))
+
+(defn run-path!
+  "沿 path 逐层向下遍历树林。
+
+  nodes         - 根级节点向量（树林）
+  path          - 索引路径，如 [2 0 1]
+  f             - (fn [path node ])，node 是当前层命中的节点，path 是从根到该节点的路径
+  children-fn   - (fn [node] -> 子节点向量)
+
+  从根层开始，按 path 每一段索引逐层深入，每到达一个节点就调用 f。
+  遍历顺序：根 → 中间节点 → 叶子。无返回值。"
+  [nodes path f children-fn]
+  (when (seq path)
+    (loop [forest     nodes
+           idxs       path
+           path-so-far []]
+      (when (seq idxs)
+        (let [i        (first idxs)
+              node     (nth forest i nil)]
+          (when node
+            (let [reached (conj path-so-far i)]
+              (f reached node)
+              (when-let [children (children-of node children-fn)]
+                (recur children (rest idxs) reached)))))))))
+
+(defn prune-subpaths
+  "路径规约：若 paths 中同时存在祖先和后代路径，去掉后代，只保留祖先。
+  顺便去重"
+  [paths]
+  (if (empty? paths)
+    []
+    (let [sorted (sort-paths paths)]
+      (reduce (fn [acc path]
+                (if (some #(within? % path) acc)
+                  acc
+                  (conj acc path)))
+              []
+              sorted))))
